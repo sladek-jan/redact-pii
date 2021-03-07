@@ -1,11 +1,24 @@
 import * as simpleRegexpBuiltIns from './built-ins/simple-regexp-patterns';
 
+export type SimpleFinding = {
+  text: string,
+  replaceWith: string
+}
+
 export interface ISyncRedactor {
-  redact(textToRedact: string): string;
+  /**
+ * @param textToRedact 
+ * @param whitelist Applies only to GoogleDLPRedactor. Set of strings that should not be redacted.
+ */
+  redact(textToRedact: string, whitelist?: Set<string>): { text: string, findings: SimpleFinding[] };
 }
 
 export interface IAsyncRedactor {
-  redactAsync(textToRedact: string): Promise<string>;
+  /**
+   * @param textToRedact 
+   * @param whitelist Applies only to GoogleDLPRedactor. Set of strings that should not be redacted.
+   */
+  redactAsync(textToRedact: string, whitelist?: Set<string> | undefined): Promise<{ text: string, findings: SimpleFinding[] }>;
 }
 
 export type IRedactor = ISyncRedactor | IAsyncRedactor;
@@ -21,11 +34,12 @@ export type AsyncCustomRedactorConfig = SyncCustomRedactorConfig | IAsyncRedacto
 
 export interface CompositeRedactorOptions<T extends AsyncCustomRedactorConfig> {
   globalReplaceWith?: string;
+  disableBuiltInRedactors?: boolean;
   builtInRedactors?: {
     [RedactorName in keyof typeof simpleRegexpBuiltIns | 'names']?: {
       enabled?: boolean;
       replaceWith?: string;
-    }
+    };
   };
   customRedactors?: {
     before?: Array<T>;

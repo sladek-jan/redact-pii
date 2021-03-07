@@ -1,5 +1,5 @@
 import { get } from 'lodash';
-import { IAsyncRedactor } from '../types';
+import { IAsyncRedactor, SimpleFinding } from '../types';
 import DLP from '@google-cloud/dlp';
 
 export const MAX_DLP_CONTENT_LENGTH = 524288;
@@ -86,17 +86,17 @@ export const defaultInfoTypes = [
   { name: 'PERU_DNI_NUMBER' },
   { name: 'PORTUGAL_CDC_NUMBER' },
   { name: 'URUGUAY_CDI_NUMBER' },
-  { name: 'VENEZUELA_CDI_NUMBER' }
+  { name: 'VENEZUELA_CDI_NUMBER' },
 ];
 const customInfoTypes = [
   {
     infoType: {
-      name: 'URL'
+      name: 'URL',
     },
     regex: {
-      pattern: '([^\\s:/?#]+):\\/\\/([^/?#\\s]*)([^?#\\s]*)(\\?([^#\\s]*))?(#([^\\s]*))?'
-    }
-  }
+      pattern: '([^\\s:/?#]+):\\/\\/([^/?#\\s]*)([^?#\\s]*)(\\?([^#\\s]*))?(#([^\\s]*))?',
+    },
+  },
 ];
 
 const likelihoodPriority: { [likelyHoodName: string]: number } = {
@@ -105,12 +105,12 @@ const likelihoodPriority: { [likelyHoodName: string]: number } = {
   UNLIKELY: 2,
   POSSIBLE: 3,
   LIKELY: 4,
-  VERY_LIKELY: 5
+  VERY_LIKELY: 5,
 };
 
 const includeQuote = true;
 
-interface Finding {
+export interface Finding {
   likelihood: string;
   quote: string;
   infoType: {
@@ -192,7 +192,7 @@ export class GoogleDLPRedactor implements IAsyncRedactor {
   constructor(private opts: GoogleDLPRedactorOptions = {}) {
     this.dlpClient = new DLP.DlpServiceClient(this.opts.clientOptions);
   }
-  async redactAsync(textToRedact: string): Promise<string> {
+  async redactAsync(textToRedact: string, whitelist?: Set<string>): Promise<{ text: string; findings: SimpleFinding[] }> {
     // default batch size is MAX_DLP_CONTENT_LENGTH/2 because some unicode characters can take more than 1 byte
     // and its difficult to get a substring of a desired target length in bytes
     const maxContentSize = this.opts.maxContentSizeForBatch || MAX_DLP_CONTENT_LENGTH / 2;
@@ -207,19 +207,21 @@ export class GoogleDLPRedactor implements IAsyncRedactor {
         batchStartIndex = batchEndIndex;
       }
       const batchResults = await Promise.all(batchPromises);
-      return batchResults.join('');
+      const mergedText = batchResults.map((r) => r.text).join('');
+      const mergedFindings = batchResults.reduce((agg, arr) => { arr.findings.forEach(f => agg.push(f)); return agg; }, [] as SimpleFinding[]);
+      return { text: mergedText, findings: mergedFindings };
     } else {
       return this.doRedactAsync(textToRedact);
     }
   }
 
-  async doRedactAsync(textToRedact: string): Promise<string> {
+  async doRedactAsync(textToRedact: string, whitelist?: Set<string>): Promise<{ text: string; findings: SimpleFinding[] }> {
     const projectId = await this.dlpClient.getProjectId();
 
     // handle info type excludes and includes
     const infoTypes = defaultInfoTypes
-      .filter(infoType => !this.opts.excludeInfoTypes || !this.opts.excludeInfoTypes.includes(infoType.name))
-      .concat((this.opts.includeInfoTypes || []).map(infoTypeName => ({ name: infoTypeName })));
+      .filter((infoType) => !this.opts.excludeInfoTypes || !this.opts.excludeInfoTypes.includes(infoType.name))
+      .concat((this.opts.includeInfoTypes || []).map((infoTypeName) => ({ name: infoTypeName })));
 
     const response = await this.dlpClient.inspectContent({
       parent: this.dlpClient.projectPath(projectId),
@@ -230,28 +232,33 @@ export class GoogleDLPRedactor implements IAsyncRedactor {
           minLikelihood,
           includeQuote,
           limits: {
-            maxFindingsPerRequest: maxFindings
-          }
+            maxFindingsPerRequest: maxFindings,
+          },
         },
         this.opts.inspectConfig
       ),
-      item: { value: textToRedact }
+      item: { value: textToRedact },
     });
-    const findings = response[0].result.findings;
+    const findings = response[0].result.findings || [];
+
+    let findingsWithoutOverlaps = findings;
+    let filteredFindings: SimpleFinding[] = []
 
     if (findings.length > 0) {
       // this is necessary to prevent tokens getting messed up with other repeated partial tokens (e.g. "my name is PERLALALALALALALALALALALALALALALALALAL...")
-      const findingsWithoutOverlaps = removeOverlappingFindings(findings);
+      findingsWithoutOverlaps = removeOverlappingFindings(findings);
 
       // sort findings by highest likelihood first
-      findingsWithoutOverlaps.sort(function(a: any, b: any) {
+      findingsWithoutOverlaps.sort(function (a: any, b: any) {
         return likelihoodPriority[b.likelihood] - likelihoodPriority[a.likelihood];
       });
 
       // in order of highest likelihood replace finding with info type name
       findingsWithoutOverlaps.forEach((finding: any) => {
         let find = finding.quote;
-        if (find !== finding.infoType.name && find.length >= MIN_FINDING_QUOTE_LENGTH) {
+        const isWhitelisted = whitelist && whitelist.has(find)
+        if (!isWhitelisted && find !== finding.infoType.name && find.length >= MIN_FINDING_QUOTE_LENGTH) {
+          filteredFindings.push({ text: find, replaceWith: finding.infoType.name })
           let numSearches = 0;
           while (numSearches++ < 1000 && textToRedact.indexOf(find) >= 0) {
             textToRedact = textToRedact.replace(find, finding.infoType.name);
@@ -260,6 +267,8 @@ export class GoogleDLPRedactor implements IAsyncRedactor {
       });
     }
 
-    return textToRedact;
+    return {
+      text: textToRedact, findings: filteredFindings
+    };
   }
 }

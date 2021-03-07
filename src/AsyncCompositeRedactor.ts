@@ -1,9 +1,9 @@
 import { composeChildRedactors } from './composition';
-import { AsyncCustomRedactorConfig, CompositeRedactorOptions, IAsyncRedactor, ISyncRedactor } from './types';
+import { AsyncCustomRedactorConfig, CompositeRedactorOptions, IAsyncRedactor, ISyncRedactor, SimpleFinding } from './types';
 import { isSyncRedactor } from './utils';
 
 /** @public */
-export interface AsyncCompositeRedactorOptions extends CompositeRedactorOptions<AsyncCustomRedactorConfig> {}
+export interface AsyncCompositeRedactorOptions extends CompositeRedactorOptions<AsyncCustomRedactorConfig> { }
 
 /** @public */
 export class AsyncCompositeRedactor implements IAsyncRedactor {
@@ -13,14 +13,20 @@ export class AsyncCompositeRedactor implements IAsyncRedactor {
     this.childRedactors = composeChildRedactors(opts);
   }
 
-  redactAsync = async (textToRedact: string) => {
+  redactAsync = async (textToRedact: string, whitelist?: Set<string>) => {
+    let allFindings: SimpleFinding[] = []
+    let redactedText = textToRedact
     for (const redactor of this.childRedactors) {
       if (isSyncRedactor(redactor)) {
-        textToRedact = redactor.redact(textToRedact);
+        const { text, findings } = redactor.redact(textToRedact, whitelist);
+        findings.forEach(f => allFindings.push(f))
+        redactedText = text;
       } else {
-        textToRedact = await redactor.redactAsync(textToRedact);
+        const { text, findings } = await redactor.redactAsync(textToRedact, whitelist);
+        findings.forEach(f => allFindings.push(f))
+        redactedText = text;
       }
     }
-    return textToRedact;
+    return { text: redactedText, findings: allFindings };
   };
 }

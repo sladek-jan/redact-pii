@@ -1,8 +1,8 @@
 import { composeChildRedactors } from './composition';
-import { CompositeRedactorOptions, ISyncRedactor, SyncCustomRedactorConfig } from './types';
+import { CompositeRedactorOptions, ISyncRedactor, SimpleFinding, SyncCustomRedactorConfig } from './types';
 
 /** @public */
-export interface SyncCompositeRedactorOptions extends CompositeRedactorOptions<SyncCustomRedactorConfig> {}
+export interface SyncCompositeRedactorOptions extends CompositeRedactorOptions<SyncCustomRedactorConfig> { }
 
 /** @public */
 export class SyncCompositeRedactor implements ISyncRedactor {
@@ -12,10 +12,16 @@ export class SyncCompositeRedactor implements ISyncRedactor {
     this.childRedactors = composeChildRedactors(opts);
   }
 
-  redact = (textToRedact: string) => {
+  redact = (textToRedact: string, whitelist?: Set<string>) => {
+    let allFindings = [] as SimpleFinding[];
+    let redactedText = textToRedact
     for (const redactor of this.childRedactors) {
-      textToRedact = redactor.redact(textToRedact);
+      const { text, findings } = redactor.redact(textToRedact, whitelist);
+      findings.forEach(f => allFindings.push(f))
+      redactedText = text
     }
-    return textToRedact;
+    return {
+      text: redactedText, findings: allFindings
+    };
   };
 }
