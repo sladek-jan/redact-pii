@@ -8,7 +8,7 @@
     "build": "del /q lib && tsc --pretty",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run verify_all && npm run build",
-	"postinstall": "npm run build",
+	"preinstall": "npm run build",
     "verify_all": "npm run typecheck && npm test && npm run test_prettier && changelog-verify CHANGELOG.md",
     "test": "jest",
     "test_prettier": "prettier './+(src|test)/**/*.+(js|ts|tsx)' --list-different",
